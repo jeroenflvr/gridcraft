@@ -71,6 +71,8 @@ fn main() -> ExitCode {
     if let Some(code) = gridcraft_sandbox::handle_args(&raw) {
         return ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
+    // Before any workbook exists: this build reads and shows numbers and dates the Belgian way.
+    gridcraft_engine::core::region::start_in_build_region();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {

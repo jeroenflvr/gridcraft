@@ -185,6 +185,33 @@ fn arabic_em(c: char) -> Option<f32> {
     }
 }
 
+/// A date typed into a column still at its default width widens the column to show it, as Excel
+/// does: a short date such as `dd/mm/yyyy` is wider than a default column and would show as
+/// `#####`. A column whose width was set, a hidden one and a merged cell are left as they are, and
+/// a column never narrows.
+pub(crate) fn widen_for_typed_date(wb: &mut gridcraft_model::Workbook, sheet: usize, at: CellRef, measure: Option<&crate::TextWidth>) {
+    let Some(sh) = wb.sheet(sheet) else { return };
+    if sh.cols.get(&at.col).is_some_and(|c| c.size.is_some() || c.hidden) || sh.merge_at(at).is_some_and(|m| !m.is_single()) {
+        return;
+    }
+    let Some(cell) = sh.cell(at) else { return };
+    let st = wb.styles.get(cell.style);
+    if cell.formula.is_some() || !matches!(cell.value, gridcraft_core::Value::Number(_)) || !crate::display::parsed(st.num_fmt.as_str()).is_date() {
+        return;
+    }
+    let text = crate::display::cell_text(wb, sh, at);
+    let width = match measure {
+        Some(m) => m(&text, &st.font, true),
+        None => approx_text_width(&text, st.font.size, st.font.bold),
+    };
+    let need = (width + 6.0 + st.align.indent as f32 * 9.0 + sh.filter_button_space(at)).clamp(8.0, 1785.0).ceil();
+    if need > sh.default_col_width
+        && let Some(sh) = wb.sheet_mut(sheet)
+    {
+        sh.cols.entry(at.col).or_default().size = Some(need);
+    }
+}
+
 /// Distinct texts AutoFit measures exactly; past this many, `Session::text_width` is asked for a
 /// quick measure so a huge column doesn't lay out every value.
 const EXACT_TEXT_WIDTHS: usize = 2_000;

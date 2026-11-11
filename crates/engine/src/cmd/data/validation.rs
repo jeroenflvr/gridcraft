@@ -231,7 +231,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     if input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
+    let v = gridcraft_core::parse::parse_input_with(input, wb.date_system, wb.region).value;
     // The formulas are written for the top-left cell of all the areas and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
     let first = RangeRef::top_left(&dv.ranges).unwrap_or(at);
@@ -342,7 +342,7 @@ pub(super) fn circle_invalid(s: &mut Session, _: &Json) -> Result<Json> {
             let r = sh.used_range().and_then(|u| r.intersection(&u));
             let Some(r) = r else { continue };
             for c in r.iter().take(100_000) {
-                let text = sh.input_text(c);
+                let text = crate::display::typed_text(&d.wb, sh, c);
                 if !text.is_empty() && check_validation(&d.wb, sheet, c, &text).is_some() {
                     bad_cells.push(c.a1());
                 }

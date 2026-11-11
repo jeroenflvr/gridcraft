@@ -34,6 +34,7 @@ mod web;
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
+    gridcraft_engine::core::region::start_in_build_region();
     web::start();
 }
 

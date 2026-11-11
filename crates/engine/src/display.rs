@@ -52,7 +52,7 @@ pub fn format_in(v: &Value, code: &str, wb: &Workbook, region: &Region) -> Forma
 /// as a number, boolean, error, date or formula, or lose a leading apostrophe). Such text is shown
 /// for editing with a leading `'`, as Excel does for text carrying a quote prefix, so that
 /// committing the editor unchanged keeps the cell as text.
-fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem) -> bool {
+fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem, region: &Region) -> bool {
     if t.is_empty() {
         return false;
     }
@@ -64,7 +64,20 @@ fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem) -> bo
     if matches!(first, Some('+' | '-')) && second.is_some_and(|c| c.is_ascii_alphabetic() || c == '(') {
         return true;
     }
-    !matches!(gridcraft_core::parse::parse_input(t, sys).value, Value::Text(ref x) if x.as_ref() == t)
+    !matches!(gridcraft_core::parse::parse_input_with(t, sys, region).value, Value::Text(ref x) if x.as_ref() == t)
+}
+
+/// A cell's content as typing it into the cell would give it again: `Sheet::input_text`, with a
+/// constant number in the workbook's region (`1,5` in nl-BE). Typed input reads the region, so
+/// the canonical `1.5` would come back as text and `1.234` as 1234.
+pub fn typed_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
+    match sheet.cell(c) {
+        Some(cell) if cell.formula.is_none() && cell.py.is_none() && !sheet.cell_pictures.contains_key(&c) => match cell.value {
+            Value::Number(n) => gridcraft_core::parse::number_input_text(n, wb.region),
+            _ => sheet.input_text(c),
+        },
+        _ => sheet.input_text(c),
+    }
 }
 
 /// What the cell editor and the formula bar start from. Same as `Cell::input_text`, except that a
@@ -73,12 +86,12 @@ fn text_needs_quote_prefix(t: &str, sys: gridcraft_core::date::DateSystem) -> bo
 /// `dddd, mmmm d`), an ISO `yyyy-mm-dd` (with `hh:mm:ss` for a time of day; just `hh:mm:ss`
 /// for a time alone) is used instead, and if even that would not read back, the serial.
 pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
-    let raw = sheet.input_text(c);
+    let raw = typed_text(wb, sheet, c);
     let Some(cell) = sheet.cell(c) else { return raw };
     if let Value::Text(t) = &cell.value
         && cell.formula.is_none()
         && wb.styles.get(cell.style).num_fmt.as_str() != "@"
-        && text_needs_quote_prefix(t, wb.date_system)
+        && text_needs_quote_prefix(t, wb.date_system, wb.region)
     {
         return format!("'{raw}");
     }
@@ -87,7 +100,8 @@ pub fn edit_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     if cell.formula.is_some() || !parsed(code).is_date() {
         return raw;
     }
-    let reads_back = |s: &str| matches!(gridcraft_core::parse::parse_input(s, wb.date_system).value, Value::Number(m) if (m - n).abs() < 1e-9);
+    let reads_back =
+        |s: &str| matches!(gridcraft_core::parse::parse_input_with(s, wb.date_system, wb.region).value, Value::Number(m) if (m - n).abs() < 1e-9);
     let shown = format(&cell.value, code, wb).text;
     if reads_back(&shown) {
         return shown;
@@ -143,8 +157,7 @@ pub fn value_text(wb: &Workbook, sheet: &Sheet, c: CellRef) -> String {
     value_text_in(wb, sheet, c, wb.region)
 }
 
-/// [`value_text`] in an explicit region. Files use the en-US one: CSV is read back with en-US
-/// rules, so a region's separators must not reach it.
+/// [`value_text`] in an explicit region.
 pub fn value_text_in(wb: &Workbook, sheet: &Sheet, c: CellRef, region: &Region) -> String {
     let style = wb.styles.get(sheet.style_id(c));
     value_text_as_in(wb, &sheet.value(c), style.num_fmt.as_str(), region)
@@ -171,9 +184,9 @@ pub fn value_text_as_in(wb: &Workbook, v: &Value, code: &str, region: &Region) -
     }
 }
 
-/// Tab-separated text of a range, as the system clipboard gets it. Always en-US, whatever the
-/// workbook's region: `edit.paste` and Get Data from a range read it back the en-US way, so a
-/// regional `1.234,50` would come back as text.
+/// Tab-separated text of a range, as the system clipboard gets it, in the workbook's region:
+/// `edit.paste` reads pasted text as typed input, which reads the region too, so a copied
+/// `1.234,50` pastes back as the same number.
 pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
     let Some(sh) = wb.sheet(sheet) else { return String::new() };
     let mut out = String::new();
@@ -188,7 +201,7 @@ pub fn range_text(wb: &Workbook, sheet: usize, r: RangeRef) -> String {
                 out.push('\t');
             }
             first = false;
-            let t = cell_text_in(wb, sh, CellRef::new(row, col), &gridcraft_core::region::EN_US);
+            let t = cell_text(wb, sh, CellRef::new(row, col));
             // Like Excel, only text with a tab or line break is quoted (its quotes doubled);
             // `say "hi"` is copied as it is (#2225).
             if t.contains(['\t', '\n', '\r']) {

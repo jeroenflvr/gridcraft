@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 fn bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_gridcraft-cli"))
+    // These tests assert en-US text; this build's binary starts in another region.
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_gridcraft-cli"));
+    cmd.env("GRIDCRAFT_REGION", "en-US");
+    cmd
 }
 
 fn run(args: &[&str]) -> Output {

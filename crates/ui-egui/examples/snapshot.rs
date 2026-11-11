@@ -12,6 +12,7 @@ use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
 fn main() {
+    gridcraft_engine::core::region::start_in_build_region();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut sample = None;
     let mut input = None;

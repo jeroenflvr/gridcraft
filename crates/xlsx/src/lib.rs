@@ -234,11 +234,25 @@ pub struct CsvOptions {
     /// Refuse (with [`IoError::TooLarge`], while reading) a file whose used range, from its first to
     /// its last non-empty cell, would pass this many cells; `None` for no limit.
     pub max_used_cells: Option<u64>,
+    /// The region whose numbers and dates the fields are read as; `None` for the region of the
+    /// workbook being made, which is the application's.
+    pub region: Option<&'static gridcraft_core::Region>,
+    /// Read numbers with a decimal point when the file plainly writes them so, though the region
+    /// writes a comma. Off for text this application wrote itself in the region.
+    pub detect_separators: bool,
 }
 
 impl Default for CsvOptions {
     fn default() -> Self {
-        CsvOptions { delimiter: b',', quote: b'"', date_system: DateSystem::D1900, parse_values: true, max_used_cells: None }
+        CsvOptions {
+            delimiter: b',',
+            quote: b'"',
+            date_system: DateSystem::D1900,
+            parse_values: true,
+            max_used_cells: None,
+            region: None,
+            detect_separators: true,
+        }
     }
 }
 

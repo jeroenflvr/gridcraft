@@ -819,6 +819,7 @@ mod sizes;
 
 use cell_styles::cell_style;
 pub use cell_styles::{CELL_STYLE_NAMES, builtin_cell_style};
+pub(crate) use sizes::widen_for_typed_date;
 pub use sizes::{approx_text_width, chars_to_points};
 use sizes::{autofit_cols, autofit_rows, col_width, default_width, hide, row_height};
 

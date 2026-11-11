@@ -125,7 +125,11 @@ pub(super) fn text_to_columns(s: &mut Session, p: &Json) -> Result<Json> {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
         let mut out: Vec<(CellRef, String)> = Vec::new();
         for (i, row) in (r.start.row..=r.end.row).enumerate() {
-            let text = sh.value(CellRef::new(row, r.start.col)).display();
+            // A number is split as the text typing it would take, since each piece is typed input.
+            let text = match sh.value(CellRef::new(row, r.start.col)) {
+                gridcraft_core::Value::Number(n) => gridcraft_core::parse::number_input_text(n, cx.wb.region),
+                v => v.display(),
+            };
             let parts: Vec<String> = match &fixed {
                 Some(w) => {
                     let chars: Vec<char> = text.chars().collect();

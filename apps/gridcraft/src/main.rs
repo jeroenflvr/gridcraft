@@ -247,6 +247,8 @@ fn main() -> eframe::Result<()> {
     if let Some(code) = gridcraft_sandbox::handle_args(&raw) {
         std::process::exit(code);
     }
+    // Before any workbook exists: this build reads and shows numbers and dates the Belgian way.
+    gridcraft_engine::core::region::start_in_build_region();
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Commands catch their panics (`Session::execute`), but the default hook only prints to

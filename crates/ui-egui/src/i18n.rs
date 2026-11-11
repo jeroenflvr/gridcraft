@@ -173,8 +173,16 @@ impl Language {
     }
 
     /// The system's preferred interface language, best effort; English when it is unknown or
-    /// unsupported. Used as the first-run default while nothing is saved.
+    /// unsupported. Used as the first-run default while nothing is saved. A build that starts in
+    /// a region of its own (`gridcraft_core::region::start_in_build_region`) starts in that
+    /// region's language instead, whatever the system's.
     pub fn system() -> Self {
+        let region = gridcraft_engine::core::region::default_region();
+        if region.tag != "en-US"
+            && let Some(lang) = Self::from_tag(region.tag)
+        {
+            return lang;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             sys_locale::get_locale().and_then(|tag| Self::from_tag(&tag)).unwrap_or(Self::En)

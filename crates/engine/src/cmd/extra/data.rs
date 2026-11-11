@@ -96,7 +96,12 @@ pub(super) fn from_csv(s: &mut Session, p: &Json) -> Result<Json> {
             let delim = str_param(p, "delimiter")
                 .and_then(|d| d.chars().next())
                 .unwrap_or(if text.lines().next().is_some_and(|l| l.contains('\t')) { '\t' } else { ',' });
-            let opts = gridcraft_xlsx::CsvOptions { delimiter: delim as u8, max_used_cells: Some(MAX_IMPORT_CELLS), ..Default::default() };
+            let opts = gridcraft_xlsx::CsvOptions {
+                delimiter: delim as u8,
+                max_used_cells: Some(MAX_IMPORT_CELLS),
+                detect_separators: p.get("detectSeparators").and_then(Json::as_bool).unwrap_or(true),
+                ..Default::default()
+            };
             // The cell limit is enforced while parsing, before an oversized file is stored.
             let wb = gridcraft_xlsx::read_csv(&bytes, &opts).map_err(|e| match e {
                 gridcraft_xlsx::IoError::TooLarge(_) => too_many_cells(),
@@ -141,7 +146,11 @@ pub(super) fn from_table_range(s: &mut Session, p: &Json) -> Result<Json> {
     let sh = d.wb.active().ok_or(EngineError::NoDocument)?;
     let r = if r.is_single() { crate::selection::current_region(sh, r.start) } else { r };
     let text = crate::display::range_text(&d.wb, d.wb.active_sheet(), r);
-    from_csv(s, &json!({"text": text, "delimiter": "\t", "sheet": format!("{} (2)", sh.name).chars().take(31).collect::<String>()}))
+    // The text was written in the workbook's region just now: it is read back exactly so.
+    from_csv(
+        s,
+        &json!({"text": text, "delimiter": "\t", "detectSeparators": false, "sheet": format!("{} (2)", sh.name).chars().take(31).collect::<String>()}),
+    )
 }
 
 pub(super) fn queries(s: &mut Session, _: &Json) -> Result<Json> {

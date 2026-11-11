@@ -665,9 +665,24 @@ pub fn all() -> &'static [&'static Region] {
     &ALL
 }
 
-/// The default region, English (United States).
+/// The region this build's applications start in: Dutch (Belgium). A local choice of this build,
+/// not the project's; `GRIDCRAFT_REGION` (a tag such as `en-US`) overrides it for one run.
+pub const BUILD_REGION: &str = "nl-BE";
+
+static DEFAULT: std::sync::OnceLock<&'static Region> = std::sync::OnceLock::new();
+
+/// The region new workbooks get: the one [`start_in_build_region`] chose, else English (United
+/// States), which is what a library user and the tests get.
 pub fn default_region() -> &'static Region {
-    &EN_US
+    DEFAULT.get().copied().unwrap_or(&EN_US)
+}
+
+/// Makes [`BUILD_REGION`], or the region named by `GRIDCRAFT_REGION`, the default for the rest
+/// of the process, and returns the default. An application calls it once, before it creates a
+/// workbook; a later call changes nothing.
+pub fn start_in_build_region() -> &'static Region {
+    let tag = std::env::var("GRIDCRAFT_REGION").ok().filter(|t| !t.trim().is_empty());
+    DEFAULT.get_or_init(|| lookup(tag.as_deref().unwrap_or(BUILD_REGION)))
 }
 
 /// The region with exactly this tag (`pt-BR`; case and `_` don't matter).

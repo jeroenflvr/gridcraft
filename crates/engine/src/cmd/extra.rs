@@ -197,7 +197,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "From Text/CSV",
             ["Data", "Get & Transform Data"],
             None,
-            "{path | text, delimiter?: \",\", sheet?: new sheet name} → imports into a new sheet as a table",
+            "{path | text, delimiter?: \",\", sheet?: new sheet name, detectSeparators?: bool (default true: numbers plainly written with a decimal point are read so in a decimal-comma region)} → imports into a new sheet as a table",
             has_doc,
             from_csv
         ),

@@ -822,7 +822,7 @@ fn show_formulas(s: &mut Session, p: &Json) -> Result<Json> {
 /// as text: a constant (not a formula's result) that would be a number if typed.
 pub fn number_stored_as_text(cell: &gridcraft_model::Cell) -> Option<f64> {
     match &cell.value {
-        Value::Text(t) if cell.formula.is_none() => gridcraft_core::parse::number_stored_as_text(t),
+        Value::Text(t) if cell.formula.is_none() => gridcraft_core::parse::number_stored_as_text_with(t, gridcraft_core::region::default_region()),
         _ => None,
     }
 }

@@ -1,7 +1,7 @@
 //! Value-axis scaling ("nice numbers") and label formatting.
 
 use gridcraft_core::{DateSystem, Value, number_to_text};
-use gridcraft_numfmt::{NumberFormat, format_value};
+use gridcraft_numfmt::{NumberFormat, format_value_in};
 
 /// Largest magnitude we plot; bigger values are clamped so ranges stay finite.
 pub(crate) const MAX_ABS: f64 = 1e300;
@@ -130,10 +130,13 @@ impl Fmt {
         {
             v = 0.0;
         }
+        // Charts have no workbook at hand here: the process's region is every workbook's.
+        let region = gridcraft_core::region::default_region();
         if self.general {
-            return general_text(v, step);
+            let t = general_text(v, step);
+            return if region.decimal == '.' { t } else { t.replacen('.', &region.decimal.to_string(), 1) };
         }
-        let mut t = format_value(&Value::Number(v), &self.fmt, DateSystem::D1900).text;
+        let mut t = format_value_in(&Value::Number(v), &self.fmt, DateSystem::D1900, region).text;
         if t.chars().count() > 40 {
             t = t.chars().take(40).collect();
         }

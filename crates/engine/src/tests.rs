@@ -4994,8 +4994,8 @@ fn filter_labels_are_the_regions_text_not_the_canonical_value() {
     assert_eq!(hidden(&s), vec![2]);
 }
 
-/// The clipboard's text is read back by `edit.paste`, which reads en-US: a number copied from a
-/// region pastes back as the same number, not as the region's grouped text read the en-US way.
+/// The clipboard's text is read back by `edit.paste` as typed input, which reads the workbook's
+/// region: a number copied in a region pastes back there as the same number.
 #[test]
 fn copied_numbers_paste_back_as_the_same_numbers_in_a_region() {
     let mut s = s();
@@ -5004,10 +5004,60 @@ fn copied_numbers_paste_back_as_the_same_numbers_in_a_region() {
     s.execute("home.numberFormat", json!({"range": "A1", "code": "#,##0.00"})).unwrap();
     assert_eq!(crate::display::cell_text(&s.doc().unwrap().wb, s.doc().unwrap().wb.active().unwrap(), CellRef::parse("A1").unwrap()), "1.234,50");
     let text = s.execute("edit.copy", json!({"range": "A1"})).unwrap()["text"].as_str().unwrap().to_string();
+    assert_eq!(text.trim_end(), "1.234,50");
     // Another session has no internal clipboard, so the paste goes through the text.
     let mut other = self::s();
+    std::sync::Arc::make_mut(&mut other.doc_mut().unwrap().wb).region = gridcraft_core::region::find("de-DE").unwrap();
     other.execute("edit.paste", json!({"text": text, "at": "B2"})).unwrap();
     assert_eq!(v(&other, "B2").as_f64(), Some(1234.5), "{text:?}");
+}
+
+/// What Belgian users type is read the Belgian way, and what the editor then shows for a cell
+/// reads back as the same value: `08/06/2026` is 8 June, `1,5` is 1.5, and a number sent as JSON
+/// is not re-read as grouped digits.
+#[test]
+fn typed_input_and_edit_text_follow_the_workbooks_region() {
+    let mut s = s();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).region = gridcraft_core::region::find("nl-BE").unwrap();
+    let serial = |y, m, d| gridcraft_core::date::serial_from_ymd(gridcraft_core::DateSystem::D1900, y, m, d);
+    let shown =
+        |s: &Session, a: &str| crate::display::cell_text(&s.doc().unwrap().wb, s.doc().unwrap().wb.active().unwrap(), CellRef::parse(a).unwrap());
+    let edit =
+        |s: &Session, a: &str| crate::display::edit_text(&s.doc().unwrap().wb, s.doc().unwrap().wb.active().unwrap(), CellRef::parse(a).unwrap());
+    for (cell, input) in [("A1", "08/06/2026"), ("A2", "1,5"), ("A3", "1.234,56"), ("A5", "12/31/2026"), ("A6", "1.5")] {
+        s.execute("cell.set", json!({"cell": cell, "input": input})).unwrap();
+    }
+    s.execute("cell.set", json!({"cell": "A4", "input": 1.234})).unwrap();
+    assert_eq!(v(&s, "A1").as_f64(), serial(2026, 6, 8));
+    assert_eq!((shown(&s, "A1"), edit(&s, "A1")), ("08/06/2026".to_string(), "08/06/2026".to_string()));
+    assert_eq!((v(&s, "A2").as_f64(), edit(&s, "A2")), (Some(1.5), "1,5".to_string()));
+    assert_eq!(v(&s, "A3").as_f64(), Some(1234.56));
+    assert_eq!((v(&s, "A4").as_f64(), edit(&s, "A4")), (Some(1.234), "1,234".to_string()));
+    // Month first, and a decimal point, are not Belgian input: they stay the text typed.
+    assert_eq!(v(&s, "A5"), Value::text("12/31/2026"));
+    assert_eq!(v(&s, "A6"), Value::text("1.5"));
+    // Committing the editor's text unchanged keeps every value.
+    let before: Vec<Value> = (1..=6).map(|i| v(&s, &format!("A{i}"))).collect();
+    for i in 1..=6 {
+        let a = format!("A{i}");
+        let text = edit(&s, &a);
+        s.execute("cell.set", json!({"cell": a, "input": text})).unwrap();
+    }
+    assert_eq!((1..=6).map(|i| v(&s, &format!("A{i}"))).collect::<Vec<_>>(), before);
+    // Replace edits the number as it is typed, and the result is still a number.
+    s.execute("edit.replace", json!({"what": "1,5", "with": "2,5"})).unwrap();
+    assert_eq!(v(&s, "A2").as_f64(), Some(2.5));
+    // The file keeps the canonical format code: only the display is regional.
+    let wb = &s.doc().unwrap().wb;
+    assert_eq!(wb.styles.get(wb.active().unwrap().style_id(CellRef::parse("A1").unwrap())).num_fmt.as_str(), "m/d/yyyy");
+    // The typed date is wider than a default column, which grew to show it; a column whose width
+    // was set keeps it.
+    let sh = wb.active().unwrap();
+    assert!(sh.col_width(0) > sh.default_col_width, "{}", sh.col_width(0));
+    s.execute("home.columnWidth", json!({"cols": "C:C", "width": 40})).unwrap();
+    let set = s.doc().unwrap().wb.active().unwrap().col_width(2);
+    s.execute("cell.set", json!({"cell": "C1", "input": "08/06/2026"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().col_width(2), set);
 }
 
 /// "Set precision as displayed" (formulas.calculationOptions `precisionAsDisplayed`). Behaviour

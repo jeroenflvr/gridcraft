@@ -528,7 +528,12 @@ pub fn save_bytes_as(wb: &Workbook, path: &str, kind: FileKind) -> Result<Vec<u8
             Err(EngineError::Other("SYLK (.slk) is supported for import only. Save as .xlsx or another supported export format.".into()))
         }
         // A workbook read from CSV keeps the separator it was read with (a `;` file stays `;`).
-        FileKind::Csv => wb.sheet(sheet).map(|sh| csv(wb, sh, wb.csv_delimiter.unwrap_or(b','))).transpose().map(Option::unwrap_or_default),
+        // A new one takes the region's: `;` where the comma is the decimal character, as
+        // spreadsheets in those regions write and expect.
+        FileKind::Csv => {
+            let delimiter = wb.csv_delimiter.unwrap_or(if wb.region.decimal == ',' { b';' } else { b',' });
+            wb.sheet(sheet).map(|sh| csv(wb, sh, delimiter)).transpose().map(Option::unwrap_or_default)
+        }
         FileKind::Tsv => wb.sheet(sheet).map(|sh| csv(wb, sh, b'\t')).transpose().map(Option::unwrap_or_default),
         FileKind::Json => crate::macros::json_bytes(wb),
         FileKind::Html => to_html(wb, sheet).map(String::into_bytes),
@@ -558,8 +563,8 @@ pub fn source_path(path: &str) -> Option<std::path::PathBuf> {
 /// Save As CSV/Text writes "the text and values as they are displayed in cells" with "all
 /// characters in each cell" (Microsoft Support, *Excel formatting and features that are not
 /// transferred to other file formats*): number formats applied, never column-width `#####`.
-/// Always with en-US separators and names, whatever the workbook's region: CSV is read back with
-/// en-US rules (`gridcraft_xlsx::read_csv`), so a regional `1.000` would reopen as 1.
+/// In the workbook's region, like the cells: `gridcraft_xlsx::read_csv` reads a file with the
+/// region of the workbook it makes, so the file reopens as the same values.
 fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
     gridcraft_xlsx::write_csv(sh, delimiter, |c| {
         // General's grid-width formatting rounds large identifiers to scientific notation.
@@ -568,9 +573,10 @@ fn csv(wb: &Workbook, sh: &Sheet, delimiter: u8) -> Result<Vec<u8>> {
             && let gridcraft_core::Value::Number(number) = sh.value(c)
             && number.is_finite()
         {
-            number.to_string()
+            let text = number.to_string();
+            if wb.region.decimal == '.' { text } else { text.replacen('.', &wb.region.decimal.to_string(), 1) }
         } else {
-            crate::display::value_text_in(wb, sh, c, &gridcraft_core::region::EN_US)
+            crate::display::value_text(wb, sh, c)
         }
     })
     .map_err(|e| EngineError::Other(e.to_string()))

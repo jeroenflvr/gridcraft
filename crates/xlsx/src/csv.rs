@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use gridcraft_core::date::{days_in_month_in, serial_from_ymd};
-use gridcraft_core::parse::{Parsed, parse_input};
-use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, Value, col_to_letters};
+use gridcraft_core::parse::{Parsed, number_stored_as_text, number_stored_as_text_with, parse_input, parse_input_with};
+use gridcraft_core::region::{DateOrder, EN_US};
+use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, Region, Value, col_to_letters};
 use gridcraft_model::{Cell, NumFmt, Sheet, StyleId, Workbook};
 
 use crate::{CsvOptions, IoError, ReadReport};
@@ -262,7 +263,7 @@ enum DateRule {
     MonthFirst,
     /// A value reads only day first (`31/05/2026`), none reads only month first.
     DayFirst,
-    /// Every date is ambiguous (`03/04/2026`): keep the input parser's month-first reading.
+    /// Every date is ambiguous (`03/04/2026`): read in the order of the file's region.
     Ambiguous,
     /// Values read only day first and values read only month first: the dates stay text.
     Conflict,
@@ -299,11 +300,14 @@ struct NumericDate {
 }
 
 impl NumericDate {
-    /// The field under the column's rule: a date when that reading is valid, else text.
-    fn read(&self, field: &str, rule: DateRule) -> Parsed {
+    /// The field under the column's rule: a date when that reading is valid, else text. An
+    /// ambiguous column is read in `region`'s order.
+    fn read(&self, field: &str, rule: DateRule, region: &Region) -> Parsed {
         let serial = match rule {
             DateRule::DayFirst => self.day_first,
-            DateRule::MonthFirst | DateRule::Ambiguous => self.month_first,
+            DateRule::MonthFirst => self.month_first,
+            DateRule::Ambiguous if day_first(region) => self.day_first,
+            DateRule::Ambiguous => self.month_first,
             DateRule::Conflict | DateRule::NoDates => None,
         };
         match serial {
@@ -313,6 +317,36 @@ impl NumericDate {
             },
             None => Parsed { value: Value::text(field), format: None },
         }
+    }
+}
+
+fn day_first(region: &Region) -> bool {
+    region.date_order == DateOrder::Dmy
+}
+
+/// The region a file's fields are read in: `region`, with a decimal point and comma groups in
+/// place of its own when the sample's numbers are written that way. A field counts when only one
+/// of the two spellings reads it as a plain number (`1234.56` and `0.125` have a decimal point;
+/// `12,5` and `1.234,56` are the region's), and the file has decimal points when some fields say
+/// so and none says otherwise. A file from a program that writes decimal points then keeps its
+/// values, instead of turning into text or `1.500` into 1500. Only the separators change: the
+/// order of day and month, the month names and the currency stay the region's.
+fn file_region(rows: &[Vec<String>], region: &Region) -> (Region, bool) {
+    if region.decimal != ',' {
+        return (*region, false);
+    }
+    let (mut point, mut regional) = (0usize, 0usize);
+    for field in rows.iter().flatten().filter(|f| f.contains(['.', ','])) {
+        match (number_stored_as_text(field).is_some(), number_stored_as_text_with(field, region).is_some()) {
+            (true, false) => point += 1,
+            (false, true) => regional += 1,
+            _ => {}
+        }
+    }
+    if point > 0 && regional == 0 {
+        (Region { decimal: EN_US.decimal, group: EN_US.group, grouping: EN_US.grouping, ..*region }, true)
+    } else {
+        (*region, false)
     }
 }
 
@@ -444,14 +478,15 @@ fn infer_date_rules(rows: &[Vec<String>], sys: DateSystem) -> Vec<(DateRule, Dat
     columns.into_iter().map(|c| (DateRule::of(c.day_first, c.month_first, c.ambiguous), c)).collect()
 }
 
-/// Warns when the sample could not choose a date order: an all-ambiguous column keeps the
-/// month-first reading, and a column with both kinds keeps its dates as text.
-fn date_warnings(columns: &[(DateRule, DateEvidence)], report: &mut ReadReport) {
+/// Warns when the sample could not choose a date order: an all-ambiguous column is read in the
+/// file's region's order, and a column with both kinds keeps its dates as text.
+fn date_warnings(columns: &[(DateRule, DateEvidence)], region: &Region, report: &mut ReadReport) {
     for (col, (rule, evidence)) in columns.iter().enumerate() {
         match rule {
             DateRule::Ambiguous => report.warn(format!(
-                "column {}: every date is ambiguous, so it was read month first ({})",
+                "column {}: every date is ambiguous, so it was read {} first ({})",
                 col_to_letters(col as u32),
+                if day_first(region) { "day" } else { "month" },
                 evidence.ambiguous_example.as_deref().unwrap_or("a date")
             )),
             DateRule::Conflict => report.warn(format!(
@@ -465,11 +500,11 @@ fn date_warnings(columns: &[(DateRule, DateEvidence)], report: &mut ReadReport) 
     }
 }
 
-/// Reads one field with the column's date rule; other values go through typed input.
-fn read_field(field: &str, sys: DateSystem, rule: DateRule) -> Parsed {
+/// Reads one field with the column's date rule; other values go through typed input in `region`.
+fn read_field(field: &str, sys: DateSystem, rule: DateRule, region: &Region) -> Parsed {
     match numeric_date(field, sys) {
-        Some(date) if rule != DateRule::NoDates => date.read(field, rule),
-        _ => parse_input(field, sys),
+        Some(date) if rule != DateRule::NoDates => date.read(field, rule, region),
+        _ => parse_input_with(field, sys, region),
     }
 }
 
@@ -486,10 +521,22 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
     if delim == quote {
         return Err(IoError::Format("the delimiter and quote character must differ".into()));
     }
-    let date_columns = if opts.parse_values { infer_date_rules(&sample_records(&text, delim, quote), opts.date_system) } else { vec![] };
-    let mut report = ReadReport::default();
-    date_warnings(&date_columns, &mut report);
     let mut wb = Workbook::new();
+    // The values are read in the workbook's region; its separators give way to a decimal point
+    // when the file's numbers are plainly written with one.
+    let own = opts.region.unwrap_or(wb.region);
+    let sample = if opts.parse_values { sample_records(&text, delim, quote) } else { vec![] };
+    let (region, decimal_point) = if opts.detect_separators { file_region(&sample, own) } else { (*own, false) };
+    let region = &region;
+    let date_columns = infer_date_rules(&sample, opts.date_system);
+    let mut report = ReadReport::default();
+    if decimal_point {
+        report.warn(format!(
+            "its numbers are written with a decimal point, so they were read that way and not as {} writes them (`1.500` is 1.5)",
+            own.name
+        ));
+    }
+    date_warnings(&date_columns, region, &mut report);
     wb.date_system = opts.date_system;
     wb.csv_delimiter = u8::try_from(delim).ok();
     let mut sheet = Sheet::new("Sheet1");
@@ -516,7 +563,7 @@ pub fn read_csv_with_report(bytes: &[u8], opts: &CsvOptions) -> Result<(Workbook
             used = Some((r0, c0, row, c1));
             let cell = if opts.parse_values {
                 let rule = date_columns.get(col).map_or(DateRule::NoDates, |(rule, _)| *rule);
-                let p = read_field(&f, opts.date_system, rule);
+                let p = read_field(&f, opts.date_system, rule, region);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,

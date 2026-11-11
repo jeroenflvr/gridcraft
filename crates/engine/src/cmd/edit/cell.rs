@@ -64,7 +64,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         }
         return Ok(Some(cell));
     }
-    let mut parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
+    let mut parsed = gridcraft_core::parse::parse_input_with(input, wb.date_system, wb.region);
     // Like Excel's automatic percent entry: a bare number of 1 or more typed into a cell already
     // formatted as a percentage is a percent (3 -> 3%); smaller numbers are taken as fractions.
     if parsed.format.is_none()
@@ -125,8 +125,17 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         Some(c) => c,
         None => s.doc()?.selection.active,
     };
-    // Both spellings take a string, number or boolean, as typed (#697).
-    let input = p.get("input").or_else(|| p.get("value")).map(json_to_input).ok_or_else(|| bad("cell.set", "missing `input` (or `value`)"))?;
+    // Both spellings take a string, number or boolean, as typed (#697). A JSON number is written
+    // the way the workbook's region types it, so that it is read as the same number.
+    let region = s.doc()?.wb.region;
+    let input = p
+        .get("input")
+        .or_else(|| p.get("value"))
+        .map(|v| match v.as_f64().filter(|_| v.is_number()) {
+            Some(n) => gridcraft_core::parse::number_input_text(n, region),
+            None => json_to_input(v),
+        })
+        .ok_or_else(|| bad("cell.set", "missing `input` (or `value`)"))?;
     let array = bool_param(p, "array").unwrap_or(false);
     let d = s.doc()?;
     if let Some(sh) = d.wb.sheet(sheet)
@@ -137,6 +146,7 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
         return Err(EngineError::Other(m));
     }
     let active_sheet = s.doc()?.wb.active_sheet();
+    let measure = s.text_width.clone();
     edit(s, |cx| {
         if array {
             // Legacy Ctrl+Shift+Enter array formula over the selection, when the selection holds
@@ -172,6 +182,7 @@ pub(super) fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             }
         }
         crate::cmd::data::grow_autofilter(sh, at);
+        crate::cmd::format::widen_for_typed_date(&mut cx.wb, sheet, at, measure.as_ref());
         cx.touch(sheet, at);
         Ok(Json::Null)
     })?;
@@ -215,7 +226,8 @@ pub(super) fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
     let sheet = target_sheet(s, p)?;
     let start = target_range(s, p)?.start;
     let Some(rows) = p.get("values").and_then(Json::as_array) else { return Err(bad("range.setValues", "missing `values` (array of rows)")) };
-    // A string is run through typed input by default, which reads it with en-US rules: a caller
+    // A string is run through typed input by default, which reads it with the workbook's region
+    // (en-US unless the application chose another): a caller
     // sending "05.04.2026" from a dd.mm.yyyy export got 4 May, and "2.500" became 2.5, in silence
     // (#2255). `parse: false` stores a string as the text it is; numbers, booleans and formulas
     // are unaffected either way.

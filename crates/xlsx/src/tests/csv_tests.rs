@@ -67,6 +67,31 @@ fn an_all_ambiguous_date_column_keeps_month_first_and_warns() {
 }
 
 #[test]
+fn a_file_is_read_in_its_region_unless_its_numbers_are_plainly_en_us() {
+    let be = CsvOptions { delimiter: 0, region: gridcraft_core::region::find("nl-BE"), ..Default::default() };
+    // A Belgian export: every date ambiguous, decimal commas, dots for thousands.
+    let (wb, report) = read_csv_with_report("Datum;Bedrag\n05/10/2026;-1.234,56\n03/08/2026;2.500,00\n01/02/2026;-3,5\n".as_bytes(), &be).unwrap();
+    assert_eq!(v(&wb, 1, 0), date(2026, 10, 5));
+    assert_eq!(v(&wb, 3, 0), date(2026, 2, 1));
+    assert_eq!((v(&wb, 1, 1), v(&wb, 2, 1), v(&wb, 3, 1)), (Value::Number(-1234.56), Value::Number(2500.0), Value::Number(-3.5)));
+    assert!(report.warnings.iter().any(|w| w.contains("day first")), "{:?}", report.warnings);
+    // A file with decimal points keeps its values: 1.500 is not 1500. Only the separators give
+    // way: its ambiguous dates are still read day first.
+    let (wb, report) = read_csv_with_report(b"date,amount\n03/04/2026,1234.56\n05/06/2026,1.500\n", &be).unwrap();
+    assert_eq!(v(&wb, 1, 0), date(2026, 4, 3));
+    assert_eq!((v(&wb, 1, 1), v(&wb, 2, 1)), (Value::Number(1234.56), Value::Number(1.5)));
+    assert!(report.warnings.iter().any(|w| w.contains("decimal point")), "{:?}", report.warnings);
+    assert!(report.warnings.iter().any(|w| w.contains("day first")), "{:?}", report.warnings);
+    // With nothing to tell them apart, or with detection off, the region decides.
+    let (wb, _) = read_csv_with_report(b"n\n1.500\n", &be).unwrap();
+    assert_eq!(v(&wb, 1, 0), Value::Number(1500.0));
+    let exact = CsvOptions { detect_separators: false, ..be.clone() };
+    let (wb, report) = read_csv_with_report(b"a;b\n1234.56;1.500\n", &exact).unwrap();
+    assert_eq!((v(&wb, 1, 0), v(&wb, 1, 1)), (Value::text("1234.56"), Value::Number(1500.0)));
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+}
+
+#[test]
 fn a_column_with_both_orders_keeps_its_dates_as_text_and_warns() {
     let (wb, report) = read_csv_with_report(b"When\n31/05/2026\n12/31/2026\n", &CsvOptions::default()).unwrap();
     assert_eq!(v(&wb, 1, 0), Value::text("31/05/2026"));
