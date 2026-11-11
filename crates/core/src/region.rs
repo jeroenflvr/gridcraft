@@ -13,9 +13,9 @@
 //! month and year are the Unicode CLDR conventions (`unicode-org/cldr-json`:
 //! `cldr-numbers-full/main/<locale>/numbers.json` and `cldr-dates-full/main/<locale>/ca-gregorian.json`),
 //! which is also what macOS, Android and ICU ship. They were read from those files for en-GB,
-//! en-IN, cs and ru, read from ICU's CLDR 48 data for the Swiss regions and nl-NL, and written
-//! from the same conventions for the other regions. CLDR data is under the Unicode License v3,
-//! reproduced in `NOTICE` (row in `ATTRIBUTION.md`).
+//! en-IN, nl-BE, cs and ru, read from ICU's CLDR 48 data for the Swiss regions and nl-NL, and
+//! written from the same conventions for the other regions. CLDR data is under the Unicode
+//! License v3, reproduced in `NOTICE` (row in `ATTRIBUTION.md`).
 //! Deliberate choices where operating systems differ from CLDR:
 //! - Short dates use a four-digit year (`dd/mm/yyyy`, where CLDR has `dd/MM/y` or `dd/MM/yy`):
 //!   Excel's short date is the system's, Windows writes four digits, and a two-digit year would
@@ -33,6 +33,8 @@
 //!   CLDR's ASCII apostrophe (`1'234.50`); parsing also accepts the typographic `’` that glibc
 //!   uses. French (Switzerland) writes a decimal point like the other Swiss regions and glibc's
 //!   `fr_CH`, where CLDR has a comma.
+//! - Dutch (Belgium) writes the short date with slashes where the Netherlands has dashes, and
+//!   pads the day (`dd/mm/yyyy`, where CLDR has `d/MM/y`) like the other day-first regions here.
 //!
 //! Regions this module doesn't list (`de-AT`, `es-MX`, `en-CA`…) resolve to the main region of
 //! their language through [`lookup`]; their own conventions (a Mexican decimal point) are not
@@ -419,6 +421,32 @@ static NL_NL: Region = Region {
     currency_format_int: "\"€\" #,##0",
 };
 
+static NL_BE: Region = Region {
+    tag: "nl-BE",
+    name: "Nederlands (België)",
+    lcid: 0x0813,
+    decimal: ',',
+    group: '.',
+    grouping: Grouping::Thousands,
+    date_order: DateOrder::Dmy,
+    date_sep: '/',
+    time_sep: ':',
+    short_date: "dd/mm/yyyy",
+    long_date: "dddd d mmmm yyyy",
+    short_time: "hh:mm",
+    long_time: "hh:mm:ss",
+    datetime: "dd/mm/yyyy hh:mm",
+    months: ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"],
+    months_abbr: ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"],
+    months_genitive: None,
+    weekdays: ["zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"],
+    weekdays_abbr: ["zo", "ma", "di", "wo", "do", "vr", "za"],
+    am_pm: ["a.m.", "p.m."],
+    currency: "€",
+    currency_format: "\"€\" #,##0.00",
+    currency_format_int: "\"€\" #,##0",
+};
+
 static PT_BR: Region = Region {
     tag: "pt-BR",
     name: "Português (Brasil)",
@@ -627,9 +655,9 @@ static ZH_TW: Region = Region {
     currency_format_int: "\"NT$\"#,##0",
 };
 
-static ALL: [&Region; 20] = [
-    &EN_US, &EN_GB, &EN_IN, &EN_CH, &ES_ES, &DE_DE, &DE_CH, &FR_FR, &FR_CH, &IT_IT, &IT_CH, &NL_NL, &PT_BR, &PT_PT, &RU_RU, &CS_CZ, &JA_JP, &KO_KR,
-    &ZH_CN, &ZH_TW,
+static ALL: [&Region; 21] = [
+    &EN_US, &EN_GB, &EN_IN, &EN_CH, &ES_ES, &DE_DE, &DE_CH, &FR_FR, &FR_CH, &IT_IT, &IT_CH, &NL_NL, &NL_BE, &PT_BR, &PT_PT, &RU_RU, &CS_CZ, &JA_JP,
+    &KO_KR, &ZH_CN, &ZH_TW,
 ];
 
 /// Every region, English (United States) first.
@@ -707,7 +735,10 @@ pub fn lookup(tag: &str) -> &'static Region {
             "CH" | "LI" => "it-CH",
             _ => "it-IT",
         },
-        "nl" => "nl-NL",
+        "nl" => match country.as_str() {
+            "BE" => "nl-BE",
+            _ => "nl-NL",
+        },
         "ru" => "ru-RU",
         "cs" => "cs-CZ",
         "ja" => "ja-JP",
@@ -811,6 +842,10 @@ mod tests {
             ("en-CH", "en-CH"),
             ("nl_NL.UTF-8", "nl-NL"),
             ("nl", "nl-NL"),
+            ("nl-SR", "nl-NL"),
+            ("nl_BE.UTF-8", "nl-BE"),
+            ("nl_BE@euro", "nl-BE"),
+            ("nl-BE-u-ca-gregory", "nl-BE"),
             ("en-AU", "en-GB"),
             ("en_GB.UTF-8", "en-GB"),
             ("en-IN", "en-IN"),
@@ -845,7 +880,18 @@ mod tests {
             assert!(r.months.iter().all(|m| !m.is_empty()) && r.months_abbr.iter().all(|m| !m.is_empty()), "{}", r.tag);
             assert!(r.weekdays.iter().all(|m| !m.is_empty()) && r.weekdays_abbr.iter().all(|m| !m.is_empty()), "{}", r.tag);
             assert_eq!(find(r.tag).map(|x| x.tag), Some(r.tag));
+            // The date fields describe one short date: a region copied from a neighbour keeps them in step.
+            assert!(r.short_date.contains(r.date_sep), "{}", r.tag);
+            assert!(r.datetime.starts_with(r.short_date), "{}", r.tag);
         }
+    }
+
+    #[test]
+    fn belgian_dutch_writes_dates_with_slashes() {
+        let be = lookup("nl_BE.UTF-8");
+        assert_eq!((be.date_order, be.date_sep, be.short_date), (DateOrder::Dmy, '/', "dd/mm/yyyy"));
+        assert_eq!((be.decimal, be.group, be.currency), (',', '.', "€"));
+        assert_eq!(be.month_from_name("mrt"), Some(3));
     }
 
     #[test]
