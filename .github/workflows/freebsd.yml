@@ -13,8 +13,8 @@ on:
       - .github/workflows/freebsd.yml
       - packaging/freebsd/**
       - packaging/env.sh
-  schedule:
-    - cron: "57 2 * * *"
+  #schedule:
+  #  - cron: "57 2 * * *"
   workflow_dispatch:
 
 concurrency:
